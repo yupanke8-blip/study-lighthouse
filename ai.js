@@ -1,7 +1,7 @@
 /* DeepSeek connection; provider secrets exist only in the Worker. */
 (function(){
- let busy=false,access='',endpoint='';
- try{endpoint=localStorage.getItem('lighthouse-ai-endpoint')||''}catch{}
+ let busy=false,access='',endpoint='https://study-lighthouse.yupanke8.workers.dev';
+ try{endpoint=localStorage.getItem('lighthouse-ai-endpoint')||endpoint}catch{}
  const notice=(s)=>{const el=document.getElementById('aiStatus');if(el)el.textContent=s};
  function batches(m){
   const out=[];let batch=[],count=0;
