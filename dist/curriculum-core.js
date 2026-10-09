@@ -1,0 +1,61 @@
+(function(root){
+ 'use strict';
+ const C=root.StudyCore,baseNormalize=C.normalize,baseRecord=C.record,baseEligible=C.eligible,baseSubjectUpdate=C.updateSubject;
+ const array=x=>Array.isArray(x)?x:[],str=x=>typeof x==='string'?x:'',copy=C.copy;
+ const id=prefix=>prefix+'-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+ const version=x=>Math.max(1,Math.floor(Number(x)||1));
+ const lessonFields=['subject','title','objective','prerequisite','definition','analogy','keypoints','pitfall','example','steps','recall','recallAnswer','recallCriteria'];
+ const teachingFields=lessonFields.filter(k=>!['subject','title'].includes(k));
+ const questionFields=['prompt','answer','explanation','options','correctIndex'];
+ const changed=(a,b,fields)=>fields.filter(k=>JSON.stringify(a[k]??'')!==JSON.stringify(b[k]??''));
+ C.normalize=function(raw,seed){const s=baseNormalize(raw,seed);s.version=5;
+  s.lessons.forEach(l=>l.contentVersion=version(l.contentVersion));s.questions.forEach(q=>{q.contentVersion=version(q.contentVersion);q.needsReview=q.needsReview===true});
+  const seen=new Set();s.syllabus=array(raw?.syllabus).filter(c=>c&&str(c.id)&&str(c.subject)&&str(c.title)&&!seen.has(c.id)&&seen.add(c.id)).map(c=>({id:c.id,subject:c.subject,title:c.title,source:str(c.source),prerequisites:[...new Set(array(c.prerequisites).filter(x=>typeof x==='string'&&x!==c.id))],topics:array(c.topics).filter(t=>t&&str(t.title)).map(t=>({id:str(t.id)||id('topic'),title:t.title,lessonId:s.lessons.some(l=>l.id===t.lessonId&&l.subject===c.subject)?t.lessonId:''}))}));
+  s.syllabus.forEach(c=>c.prerequisites=c.prerequisites.filter(x=>s.syllabus.some(other=>other.id===x&&other.subject===c.subject)));
+  s.revisions=array(raw?.revisions).filter(r=>r&&str(r.id)&&str(r.entityId)&&str(r.kind)).map(r=>copy(r));
+  s.quizHistory=array(raw?.quizHistory).filter(q=>q&&str(q.id)&&Array.isArray(q.results)).map(q=>copy(q));
+  s.quizDraft=null;const draft=raw?.quizDraft;
+  if(draft&&str(draft.id)&&!draft.finished&&['answer','self'].includes(draft.phase)&&Array.isArray(draft.questions)&&draft.questions.length>=2&&draft.questions.length<=20&&new Set(draft.questions.map(q=>q?.id)).size===draft.questions.length&&draft.questions.every(q=>q&&['id','lessonId','prompt','answer','explanation'].every(k=>typeof q[k]==='string')&&(!q.options||(Array.isArray(q.options)&&q.options.length>=2&&q.options.every(x=>typeof x==='string')&&Number.isInteger(q.correctIndex)&&q.correctIndex>=0&&q.correctIndex<q.options.length)))){
+   const answers=Object.create(null);for(const q of draft.questions){const a=draft.answers?.[q.id];if(a&&str(a.response).trim()){answers[q.id]={response:a.response};if(q.options&&Number.isInteger(a.choice)&&a.choice>=0&&a.choice<q.options.length)answers[q.id].choice=a.choice;if(!q.options&&typeof a.selfCorrect==='boolean')answers[q.id].selfCorrect=a.selfCorrect}}
+   s.quizDraft={...copy(draft),subject:str(draft.subject),chapterTitle:str(draft.chapterTitle),answers,index:Math.max(0,Math.min(draft.questions.length-1,Math.floor(Number(draft.index)||0)))};
+   if(draft.phase==='self'&&!draft.questions.every(q=>answers[q.id]?.response.trim()))s.quizDraft.phase='answer';
+  }
+  return s;
+ };
+ C.currentAttempt=(s,a)=>{const q=s.questions.find(q=>q.id===a.id),l=q&&s.lessons.find(l=>l.id===q.lessonId);return !!q&&!!l&&version(a.questionVersion)===version(q.contentVersion)&&version(a.lessonVersion)===version(l.contentVersion)};
+ C.status=function(s,lessonId){const l=s.lessons.find(l=>l.id===lessonId),qs=s.questions.filter(q=>q.lessonId===lessonId),p=s.learning[lessonId]||{},latest=new Map();s.attempts.filter(a=>C.currentAttempt(s,a)).forEach(a=>latest.set(a.id,a.correct));const seen=qs.filter(q=>latest.has(q.id)).length,right=qs.filter(q=>latest.get(q.id)===true).length,mistakes=qs.filter(q=>s.mistakes.includes(q.id)).length,pending=qs.filter(q=>q.needsReview).length;const passed=C.eligible(s,lessonId)&&qs.length>0&&right===qs.length&&!pending;
+  const label=!C.ready(l)?'待补讲解':!p.stage&&!p.lastStudied?'尚未开始':!p.recallConfirmed?'学习中':pending?'关联题待核对':!seen?'待练习检验':passed?'本轮通过':'需要巩固';return {label,seen,right,total:qs.length,mistakes,pending,passed};
+ };
+ C.eligible=(s,lessonId)=>baseEligible(s,lessonId);
+ C.record=function(s,qid,correct,response,date){const q=s.questions.find(q=>q.id===qid);if(q?.needsReview)throw Error('此题需先对照修订后的讲解核对');const a=baseRecord(s,qid,correct,response,date);a.questionVersion=version(q.contentVersion);a.lessonVersion=version(s.lessons.find(l=>l.id===q.lessonId).contentVersion);return a};
+ C.chapterStats=function(s,chapter){const topics=chapter.topics.map(t=>{const l=s.lessons.find(l=>l.id===t.lessonId),status=l?C.status(s,l.id):null;return {...t,lesson:l,status,covered:!!l&&C.ready(l)}});return {topics,total:topics.length,covered:topics.filter(t=>t.covered).length,passed:topics.filter(t=>t.status?.passed).length,missing:topics.filter(t=>!t.covered).length}};
+ C.saveChapter=function(s,values){const existing=s.syllabus.find(c=>c.id===values.id),title=str(values.title).trim(),subject=str(values.subject).trim();if(!title||!subject)throw Error('请填写科目和章节名称');if(s.syllabus.some(c=>c.id!==values.id&&c.subject===subject&&c.title===title))throw Error('这个科目已有同名章节');
+  const titles=[...new Set(str(values.topics).split('\n').map(x=>x.trim()).filter(Boolean))];if(!titles.length)throw Error('请按考纲填写至少一个知识点');if(titles.length>80)throw Error('单章最多 80 项，请拆分章节');
+  const next={id:existing?.id||id('chapter'),subject,title,source:str(values.source).trim(),prerequisites:[...new Set(array(values.prerequisites))],topics:titles.map(title=>{const old=existing?.topics.find(t=>t.title===title);return {id:old?.id||id('topic'),title,lessonId:s.lessons.some(l=>l.id===old?.lessonId&&l.subject===subject)?old.lessonId:''}})};
+  for(const ref of next.prerequisites)if(ref===next.id||!s.syllabus.some(c=>c.id===ref&&c.subject===subject))throw Error('先修章节必须是同科目的其他章节');
+  const all=s.syllabus.filter(c=>c.id!==next.id).concat(next),visiting=new Set(),visited=new Set();function visit(cid){if(visiting.has(cid))throw Error('先修顺序形成循环，请调整');if(visited.has(cid))return;visiting.add(cid);for(const ref of all.find(c=>c.id===cid)?.prerequisites||[])visit(ref);visiting.delete(cid);visited.add(cid)}all.forEach(c=>visit(c.id));
+  if(existing)s.syllabus[s.syllabus.indexOf(existing)]=next;else s.syllabus.push(next);return next;
+ };
+ C.linkTopic=function(s,chapterId,topicId,lessonId){const c=s.syllabus.find(c=>c.id===chapterId),t=c?.topics.find(t=>t.id===topicId);if(!t)throw Error('知识点不存在');if(lessonId&&!s.lessons.some(l=>l.id===lessonId&&l.subject===c.subject))throw Error('只能关联本科目的概念');t.lessonId=lessonId};
+ C.updateSubject=function(s,sid,values){const old=s.subjects.find(x=>x.id===sid)?.name,result=baseSubjectUpdate(s,sid,values);if(old&&old!==result.name){s.syllabus.filter(c=>c.subject===old).forEach(c=>c.subject=result.name);s.materials?.filter(m=>m.subject===old).forEach(m=>m.subject=result.name)}return result};
+ C.reviseLesson=function(s,next,reason,evidence,date){const existing=s.lessons.find(l=>l.id===next.id);if(!existing)throw Error('讲解不存在');const fields=changed(existing,next,lessonFields);if(!fields.length)return {changed:false,affected:0};if(!str(reason).trim())throw Error('请简要填写修改原因');
+  const teaching=fields.some(k=>teachingFields.includes(k)),related=s.questions.filter(q=>q.lessonId===existing.id),before=copy(existing);Object.assign(existing,next);existing.contentVersion=version(before.contentVersion)+(teaching?1:0);delete existing.revisionReason;delete existing.revisionEvidence;
+  related.forEach(q=>{q.subject=existing.subject;q.topic=existing.title;if(teaching)q.needsReview=true});
+  if(teaching){const p=s.learning[existing.id];if(p.recallText?.trim())p.recallHistory=[...(p.recallHistory||[]),{date:p.recallDate||date,text:p.recallText,lessonVersion:version(before.contentVersion)}].slice(-10);Object.assign(p,{stage:0,exampleShown:0,recallText:'',recallDate:date,recallRevealed:false,recallConfirmed:false,recallChecks:[],reviewLevel:0,lastReviewDate:'',nextReview:date});existing.reviewedAt='';}
+  s.syllabus.forEach(c=>c.topics.forEach(t=>{if(t.lessonId===existing.id&&c.subject!==existing.subject)t.lessonId=''}));
+  s.revisions.push({id:id('revision'),kind:'lesson',entityId:existing.id,date,reason:str(reason).trim(),evidence:str(evidence).trim(),fields,before,after:copy(existing),affectedQuestionIds:teaching?related.map(q=>q.id):[]});return {changed:true,affected:teaching?related.length:0};
+ };
+ C.reviseQuestion=function(s,next,reason,evidence,date){const q=s.questions.find(q=>q.id===next.id);if(!q)throw Error('题目不存在');const fields=changed(q,next,questionFields);if(!fields.length)return false;if(!str(reason).trim())throw Error('请填写修改原因');if(next.options&&next.answer.trim()!==next.options[next.correctIndex]?.trim())throw Error('参考答案必须与正确选项一致');const before=copy(q);Object.assign(q,next,{contentVersion:version(q.contentVersion)+1,needsReview:false});
+  s.mistakes=s.mistakes.filter(x=>x!==q.id);Object.assign(s.learning[q.lessonId],{reviewLevel:0,nextReview:date,lastReviewDate:''});s.revisions.push({id:id('revision'),kind:'question',entityId:q.id,lessonId:q.lessonId,date,reason:str(reason).trim(),evidence:str(evidence).trim(),fields,before,after:copy(q)});return true;
+ };
+ C.confirmQuestion=function(s,qid,date){const q=s.questions.find(q=>q.id===qid);if(!q?.needsReview)return;q.needsReview=false;s.revisions.push({id:id('revision'),kind:'question-check',entityId:qid,lessonId:q.lessonId,date,reason:'已对照修订后的讲解核对关联题',evidence:'人工核对',fields:[]});};
+ C.mixedPool=function(s,subject,chapterId){const chapter=s.syllabus.find(c=>c.id===chapterId&&c.subject===subject),allowed=chapter?new Set(chapter.topics.map(t=>t.lessonId)):null;const lessons=s.lessons.filter(l=>l.subject===subject&&(!allowed||allowed.has(l.id))&&C.eligible(s,l.id));return lessons.map(l=>({lesson:l,questions:s.questions.filter(q=>q.lessonId===l.id&&!q.needsReview)})).filter(g=>g.questions.length)};
+ C.makeMixed=function(s,subject,chapterId,count,random=Math.random){if(chapterId&&!s.syllabus.some(c=>c.id===chapterId&&c.subject===subject))throw Error('请选择有效章节');const groups=C.mixedPool(s,subject,chapterId);if(groups.length<2)throw Error('至少需要两个已完成概念学习、且有关联题的知识点');const shuffle=list=>{const a=[...list];for(let i=a.length-1;i>0;i--){const j=Math.floor(random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};const queues=shuffle(groups).map(g=>shuffle(g.questions));const selected=[];const wanted=Math.max(2,Math.min(20,Math.floor(Number(count)||6)));while(selected.length<wanted&&queues.some(q=>q.length)){for(const queue of queues){if(queue.length&&selected.length<wanted)selected.push(queue.shift())}}
+  return {id:id('quiz'),subject,chapterId:chapterId||'',chapterTitle:s.syllabus.find(c=>c.id===chapterId)?.title||'本科综合',questions:shuffle(selected).map(q=>({...copy(q),lessonVersion:version(s.lessons.find(l=>l.id===q.lessonId).contentVersion)})),answers:Object.create(null),index:0,phase:'answer',finished:false};
+ };
+ C.commitMixed=function(s,quiz,date){if(quiz.finished||s.quizHistory.some(q=>q.id===quiz.id))throw Error('这次测验已经记录');
+  for(const q of quiz.questions){const current=s.questions.find(x=>x.id===q.id),lesson=current&&s.lessons.find(l=>l.id===current.lessonId);if(!current||current.needsReview||!C.eligible(s,lesson?.id)||version(current.contentVersion)!==version(q.contentVersion)||version(lesson.contentVersion)!==version(q.lessonVersion))throw Error('测验中的内容已修改或需要重新学习，请重新组卷');const a=quiz.answers[q.id];if(!a||!str(a.response).trim()||(!q.options&&typeof a.selfCorrect!=='boolean')||(q.options&&(!Number.isInteger(a.choice)||!q.options[a.choice])))throw Error('请完成作答和简答题自评');}
+  const results=quiz.questions.map(q=>{const a=quiz.answers[q.id],correct=q.options?a.choice===q.correctIndex:a.selfCorrect;const r=C.record(s,q.id,correct,a.response,date);r.kind=q.options?'mixed-choice':'mixed-self';return {...r,lessonId:q.lessonId,prompt:q.prompt,referenceAnswer:q.answer,explanation:q.explanation}});C.completeReview(s,results,date);const result={id:quiz.id,date,subject:quiz.subject,chapterId:quiz.chapterId,chapterTitle:quiz.chapterTitle,results};s.quizHistory.push(result);quiz.finished=true;return result;
+ };
+ if(typeof module!=='undefined')module.exports=C;
+})(globalThis);

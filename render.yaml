@@ -1,0 +1,17 @@
+services:
+  - type: web
+    runtime: static
+    name: study-lighthouse
+    repo: https://github.com/yupanke8-blip/study-lighthouse
+    buildCommand: test -f dist/index.html
+    staticPublishPath: dist
+    envVars:
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
