@@ -1,3 +1,5 @@
+// Allow initial deployment before runtime secrets are bound.
+// backend/worker.js fails closed if either secret is missing and requires authentication.
 {
   "name": "study-lighthouse",
   "main": "backend/worker.js",
@@ -5,12 +7,6 @@
   "workers_dev": true,
   "vars": {
     "DEEPSEEK_MODEL": "deepseek-flash"
-  },
-  "secrets": {
-    "required": [
-      "DEEPSEEK_API_KEY",
-      "STUDY_ACCESS_TOKEN"
-    ]
   },
   "observability": {
     "enabled": false
