@@ -1,0 +1,3 @@
+# 在 Cloudflare 以 Secret 类型填写，不要把真实值提交到 GitHub
+DEEPSEEK_API_KEY=
+STUDY_ACCESS_TOKEN=
