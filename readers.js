@@ -10,6 +10,32 @@ async function readStudyFile(file){
   const xml=new DOMParser().parseFromString(await doc.async('string'),'application/xml');if(xml.querySelector('parsererror'))throw Error('Word 正文格式无法解析');
   return [...xml.getElementsByTagNameNS('*','p')].map(p=>[...p.getElementsByTagNameNS('*','t')].map(t=>t.textContent).join('')).filter(Boolean).join('\n\n');
  }
+ if(ext==='pptx'){
+  await loadReaderScript('./vendor/jszip.min.js');
+  const zip=await JSZip.loadAsync(await file.arrayBuffer());
+  async function xmlAt(path){
+   const f=zip.file(path);if(!f||f._data?.uncompressedSize>5*1024*1024)throw Error('PPTX 内容缺失或过大');
+   const d=new DOMParser().parseFromString(await f.async('string'),'application/xml');
+   if(d.getElementsByTagName('parsererror').length)throw Error('PPTX XML 无法解析');return d;
+  }
+  const presentation=await xmlAt('ppt/presentation.xml'),rels=await xmlAt('ppt/_rels/presentation.xml.rels');
+  const byId=new Map([...rels.getElementsByTagNameNS('*','Relationship')].filter(r=>r.getAttribute('TargetMode')!=='External').map(r=>[r.getAttribute('Id'),r.getAttribute('Target')]));
+  const ids=[...presentation.getElementsByTagNameNS('*','sldId')];
+  if(!ids.length||ids.length>150)throw Error('PPTX 无幻灯片或超过 150 页，请拆分');
+  const pages=[];let total=0;
+  for(let i=0;i<ids.length;i++){
+   const rid=ids[i].getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id'),target=byId.get(rid);
+   if(!target)throw Error('PPTX 幻灯片引用缺失');
+   const path=new URL(target,'https://local.invalid/ppt/presentation.xml').pathname.slice(1);
+   if(!path.startsWith('ppt/slides/'))throw Error('PPTX 幻灯片路径无效');
+   const doc=await xmlAt(path);
+   const paragraphs=[...doc.getElementsByTagNameNS('*','p')].map(p=>[...p.getElementsByTagNameNS('*','t')].map(t=>t.textContent).join('')).filter(Boolean);
+   const missing=doc.getElementsByTagNameNS('*','pic').length||doc.getElementsByTagNameNS('*','chart').length||doc.getElementsByTagNameNS('*','oMath').length;
+   pages.push('[PPT 第 '+(i+1)+' 页]\n'+(paragraphs.join('\n')||'本页未提取到文字。')+(missing?'\n[本页含图片、图表或公式，尚未识别；依赖这些内容的结论需要补充原文。]':''));
+   total+=pages[pages.length-1].length;if(total>80000)throw Error('正文超过 8 万字，请按章节拆分');
+  }
+  return pages.join('\n\n');
+ }
  if(ext==='pdf'){
   await loadReaderScript('./vendor/pdf.worker.js');await loadReaderScript('./vendor/pdf.js');await loadReaderScript('./vendor/pdf-cmaps.js');
   class LocalCMaps{async fetch({name}){const source=lighthouseCMaps[name];if(!source)throw Error('无法读取 PDF 的字符映射');return {cMapData:Uint8Array.from(atob(source),x=>x.charCodeAt(0)),compressionType:1}}}
@@ -19,5 +45,5 @@ async function readStudyFile(file){
    if(!total)throw Error('未提取到文字，可能是扫描 PDF。请先识别文字后粘贴，或在聊天中提供资料。');return pages.join('\n\n');
   }finally{if(doc)await doc.destroy();else await task.destroy()}
  }
- throw Error('请选择 TXT、Markdown、DOCX 或含文字的 PDF 文件');
+ throw Error('请选择 TXT、Markdown、DOCX、PPTX 或含文字的 PDF 文件（旧版 DOC/PPT 请另存为 DOCX/PPTX）');
 }
