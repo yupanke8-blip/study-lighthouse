@@ -15,6 +15,8 @@
  function updateButtons(){
   document.querySelectorAll('[data-action="ai-generate"]').forEach(b=>{
    b.disabled=busy;
+   b.type='button';
+   b.onclick=()=>{generateFromButton(b).catch(error=>{busy=false;activeMaterial=b.dataset.id;notice('无法开始生成：'+error.message);toast('生成未开始，请查看按钮下方提示');updateButtons()})};
    b.textContent=busy&&b.dataset.id===activeMaterial?'正在生成并复核…':'自动生成课程 / 继续';
   });
  }
@@ -58,16 +60,16 @@
   updateButtons();
   for(const id of ['aiEndpoint','aiAccess']){const input=document.getElementById(id);input.style.cssText='display:block;width:100%;box-sizing:border-box;min-height:44px;margin:8px 0 16px';input.parentElement.style.display='block';input.addEventListener('input',()=>{if(id==='aiEndpoint')endpoint=input.value.trim();else access=input.value.trim()})}
  };
- document.addEventListener('click',async e=>{
-  const btn=e.target.closest('[data-action="ai-generate"]');if(!btn)return;if(busy){toast('正在生成并复核，请稍候；无需重复点击');return}
+ async function generateFromButton(btn){
+  if(!btn)return;if(busy){toast('正在生成并复核，请稍候；无需重复点击');return}
   activeMaterial=btn.dataset.id;
   const m=state.materials.find(m=>m.id===btn.dataset.id);if(!m){notice('资料未找到，请返回资料列表重新选择');toast('资料未找到');return}
   endpoint=document.getElementById('aiEndpoint')?.value.trim()||endpoint;access=document.getElementById('aiAccess')?.value.trim()||access;
   if(!endpoint||!access){toast('请先填写连接设置中的学习访问口令');notice('请展开连接设置，填写后台地址和学习访问口令');document.querySelector('#materialsBody details')?.setAttribute('open','');return}
   busy=true;updateButtons();
   notice('已开始处理资料，正在准备生成…');toast('已开始生成课程，请保持页面打开');
-  btn.parentElement.querySelector('[data-ai-feedback]')?.scrollIntoView({block:'nearest',behavior:'smooth'});
   try{
+   btn.parentElement.querySelector('[data-ai-feedback]')?.scrollIntoView({block:'nearest',behavior:'smooth'});
    url();const parts=batches(m);let added=0;
    if(!persist())throw Error('本机保存失败，请先导出备份并解决存储问题');
    for(let i=0;i<parts.length;i++){
@@ -82,7 +84,7 @@
    renderAll();notice('完成：新增 '+added+' 个概念。进入「概念课堂」开始学习；AI 复核不代表教材级准确保证。');
   }catch(e){notice(e.message+'。已成功保存的课程保留，点击同一资料的按钮可继续。')}
   finally{busy=false;updateButtons()}
- });
+ }
  document.addEventListener('DOMContentLoaded',()=>{
   const hero=document.getElementById('heroStart');const add=document.createElement('button');add.className='outline-btn';add.textContent='上传资料，生成课程';add.style.margin='12px';add.onclick=()=>navigate('materials');hero.after(add);
  });
