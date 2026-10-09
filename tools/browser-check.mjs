@@ -15,10 +15,10 @@ try{
  browser=await webkit.launch();
  const page=await browser.newPage({...devices['iPad (gen 7)']});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- let calls=0,release;
+ let calls=0,release,mode='quota';
  await page.route('https://study-lighthouse.yupanke8.workers.dev/**',async route=>{
   if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers:{'access-control-allow-origin':'*','access-control-allow-headers':'authorization,content-type','access-control-allow-methods':'GET,POST,OPTIONS'}});return}
-  if(route.request().url().endsWith('/generate')){calls++;await new Promise(r=>release=r);await route.fulfill({status:502,contentType:'application/json',headers:{'access-control-allow-origin':'*'},body:JSON.stringify({error:'DeepSeek 余额不足，请在开放平台充值'})})}
+  if(route.request().url().endsWith('/generate')){calls++;await new Promise(r=>release=r);await route.fulfill({status:200,contentType:'application/x-ndjson',headers:{'access-control-allow-origin':'*'},body:JSON.stringify({type:'progress',stage:'reviewing',seconds:10})+'\n'+(mode==='quota'?JSON.stringify({type:'error',error:'DeepSeek 余额不足，请在开放平台充值'})+'\n':'')})}
   else await route.fulfill({status:200,contentType:'application/json',headers:{'access-control-allow-origin':'*'},body:'{"ok":true}'});
  });
  await page.goto('http://127.0.0.1:'+server.address().port);
@@ -45,6 +45,12 @@ try{
  await page.waitForFunction(()=>document.querySelector('[data-ai-feedback]')?.textContent.includes('余额不足'));
  assert.equal(await btn.isDisabled(),false);
  assert.equal(calls,1,'no automatic paid retries');
+ mode='truncated';release=null;await btn.tap();
+ for(let i=0;i<100&&!release;i++)await new Promise(r=>setTimeout(r,50));
+ assert.ok(release);release();
+ await page.waitForFunction(()=>document.querySelector('[data-ai-feedback]')?.textContent.includes('提前结束'));
+ assert.equal(await btn.isDisabled(),false);
+ assert.equal(calls,2,'one request per explicit click');
  assert.deepEqual(errors,[]);
  console.log('PASS: full-page iPad WebKit touch, missing credentials, immediate progress, quota error, unlock, no automatic retry');
 }finally{await browser?.close();await new Promise(r=>server.close(r))}

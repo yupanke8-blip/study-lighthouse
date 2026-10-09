@@ -34,15 +34,33 @@
   if(u.protocol!=='https:'||!u.hostname.endsWith('.workers.dev')||u.username||u.password||u.search||u.hash)throw Error('请填写自己的 https://名称.子域.workers.dev 后台地址');
   return u.origin;
  }
- async function api(path,data){
+ async function api(path,data,onProgress=()=>{}){
   if(!endpoint||!access)throw Error('请先填写后台地址和学习访问口令');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),200000);
   try{
-   const response=await fetch(url()+path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json',Authorization:'Bearer '+access},...(data?{body:JSON.stringify(data)}:{}),signal:controller.signal});
-   const result=await response.json();
+   const response=await fetch(url()+path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json',Authorization:'Bearer '+access,Accept:data?'application/x-ndjson':'application/json'},...(data?{body:JSON.stringify(data)}:{}),signal:controller.signal});
+   if(response.ok&&response.headers.get('Content-Type')?.includes('application/x-ndjson')){
+    if(!response.body)throw Error('后台没有返回数据流，本批未确认完成');
+    const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',result,streamError;
+    const consume=line=>{
+     if(!line.trim())return;
+     let event;try{event=JSON.parse(line)}catch{throw Error('后台返回了无法识别的数据，本批未导入')}
+     if(event.type==='progress')onProgress(event);
+     if(event.type==='result')result=event;
+     if(event.type==='error')streamError=event.error||'后台生成失败';
+    };
+    try{
+     while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end;while((end=buffer.indexOf('\n'))>=0){consume(buffer.slice(0,end));buffer=buffer.slice(end+1)}}
+     buffer+=decoder.decode();consume(buffer);
+    }finally{reader.releaseLock()}
+    if(streamError)throw Error(streamError);
+    if(!result)throw Error('生成连接提前结束，未收到最终课程。无法确认本批是否完成，重试可能再次产生费用');
+    return result;
+   }
+   let result;try{result=await response.json()}catch{throw Error('后台返回异常（HTTP '+response.status+'），本批未导入')}
    if(!response.ok)throw Error(result.error||'后台请求失败');
    return result;
-  }catch(e){if(e.name==='AbortError')throw Error('等待超时，已停止。稍后可继续；重试本批可能再次产生费用');if(e instanceof TypeError)throw Error('无法连接后台，请检查地址、网络或后台部署状态');throw e}finally{clearTimeout(timer)}
+  }catch(e){if(e.name==='AbortError')throw Error('等待超时，已停止。稍后可继续；重试本批可能再次产生费用');if(e instanceof TypeError)throw Error('生成连接中断或后台暂不可达，无法确认本批是否完成；未自动重试，手动重试可能再次产生费用');throw e}finally{clearTimeout(timer)}
  }
  const oldRender=renderMaterials;
  renderMaterials=function(){
@@ -75,7 +93,7 @@
    for(let i=0;i<parts.length;i++){
     if(state.lessons.some(l=>l.aiMaterialId===m.id&&l.aiChunk===i))continue;
     notice('正在生成并复核第 '+(i+1)+' / '+parts.length+' 批；已完成的批次会保留。');
-    const result=await api('/generate',{material:{id:m.id,title:m.title,subject:m.subject},segments:parts[i],chunk:i});
+    const result=await api('/generate',{material:{id:m.id,title:m.title,subject:m.subject},segments:parts[i],chunk:i},event=>notice('第 '+(i+1)+' / '+parts.length+' 批 · '+(event.stage==='reviewing'?'正在复核讲解和答案':'正在生成课程')+' · 后台已处理 '+(Number(event.seconds)||0)+' 秒'));
     if(!state.materials.some(x=>x.id===m.id&&x.text===m.text))throw Error('当前资料发生变化，已停止合并');
     const preview=C.validateCourse(result.course,state);
     state=C.mergeCourse(state,preview,StudySeed);added+=preview.lessons.length;

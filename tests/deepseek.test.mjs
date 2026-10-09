@@ -27,3 +27,25 @@ test('课程合并保留旧记录，重新载入保留分批标识',async()=>{
  assert.throws(()=>C.validateCourse({...c,lessons:[{...c.lessons[0],definition:'冲突改写'}]},s),/冲突|覆盖|相同/);
 });
 test('前端与解析器脚本语法有效',async()=>{for(const f of ['ai.js','readers.js','learning-tools.js'])new vm.Script(await readFile(new URL('../dist/'+f,import.meta.url),'utf8'))});
+
+test('流式连接立即返回进度，最终课程必须经过复核',async t=>{
+ const count=mockModels(t,[course(),{passed:true,issues:[]}]);
+ const req=request();req.headers.set('Accept','application/x-ndjson');
+ const res=await worker.fetch(req,env);
+ assert.match(res.headers.get('Content-Type'),/x-ndjson/);
+ const events=(await res.text()).trim().split('\n').map(JSON.parse);
+ assert.equal(events[0].type,'progress');
+ assert.ok(events.some(e=>e.stage==='reviewing'));
+ assert.equal(events.at(-1).type,'result');
+ assert.ok(events.at(-1).course.lessons.length);
+ assert.equal(count(),2);
+});
+test('流式余额不足保留真实错误且无自动重试',async t=>{
+ const count=mockModels(t,[new Response('',{status:402})]);
+ const req=request();req.headers.set('Accept','application/x-ndjson');
+ const res=await worker.fetch(req,env);
+ const events=(await res.text()).trim().split('\n').map(JSON.parse);
+ assert.equal(events.at(-1).type,'error');
+ assert.match(events.at(-1).error,/余额不足/);
+ assert.equal(count(),1);
+});
