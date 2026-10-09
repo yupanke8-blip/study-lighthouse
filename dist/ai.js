@@ -1,8 +1,23 @@
 /* DeepSeek connection; provider secrets exist only in the Worker. */
 (function(){
- let busy=false,access='',endpoint='https://study-lighthouse.yupanke8.workers.dev';
+ let lastNotice='',activeMaterial='',busy=false,access='',endpoint='https://study-lighthouse.yupanke8.workers.dev';
  try{endpoint=localStorage.getItem('lighthouse-ai-endpoint')||endpoint}catch{}
- const notice=(s)=>{const el=document.getElementById('aiStatus');if(el)el.textContent=s};
+ const notice=(s)=>{
+  lastNotice=s;
+  const el=document.getElementById('aiStatus');if(el)el.textContent=s;
+  document.querySelectorAll('[data-action="ai-generate"]').forEach(b=>{
+   if(b.dataset.id!==activeMaterial)return;
+   let feedback=b.parentElement.querySelector('[data-ai-feedback]');
+   if(!feedback){feedback=document.createElement('p');feedback.setAttribute('data-ai-feedback','');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');feedback.style.cssText='flex-basis:100%;width:100%;white-space:normal;overflow-wrap:anywhere;color:#30334b;padding:12px;background:#f3f1ff;border-radius:10px';b.parentElement.append(feedback)}
+   feedback.textContent=s;
+  });
+ };
+ function updateButtons(){
+  document.querySelectorAll('[data-action="ai-generate"]').forEach(b=>{
+   b.disabled=busy;
+   b.textContent=busy&&b.dataset.id===activeMaterial?'正在生成并复核…':'自动生成课程 / 继续';
+  });
+ }
  function batches(m){
   const out=[];let batch=[],count=0;
   C.paragraphs(m.text).forEach((p,i)=>{
@@ -39,16 +54,19 @@
    endpoint=document.getElementById('aiEndpoint').value.trim();access=document.getElementById('aiAccess').value.trim();
    try{url();localStorage.setItem('lighthouse-ai-endpoint',endpoint);notice('正在检查…');await api('/health');notice('后台配置检查通过。首次生成将检验 DeepSeek 密钥和余额。')}catch(e){notice(e.message)}
   };
-  if(busy)notice('正在生成及复核，请保持页面打开…');
-  body.querySelectorAll('[data-action="ai-generate"]').forEach(b=>b.disabled=busy);
+  if(lastNotice)notice(lastNotice);
+  updateButtons();
+  for(const id of ['aiEndpoint','aiAccess']){const input=document.getElementById(id);input.style.cssText='display:block;width:100%;box-sizing:border-box;min-height:44px;margin:8px 0 16px';input.parentElement.style.display='block';input.addEventListener('input',()=>{if(id==='aiEndpoint')endpoint=input.value.trim();else access=input.value.trim()})}
  };
  document.addEventListener('click',async e=>{
-  const btn=e.target.closest('[data-action="ai-generate"]');if(!btn||busy)return;
-  const m=state.materials.find(m=>m.id===btn.dataset.id);if(!m)return;
+  const btn=e.target.closest('[data-action="ai-generate"]');if(!btn)return;if(busy){toast('正在生成并复核，请稍候；无需重复点击');return}
+  activeMaterial=btn.dataset.id;
+  const m=state.materials.find(m=>m.id===btn.dataset.id);if(!m){notice('资料未找到，请返回资料列表重新选择');toast('资料未找到');return}
   endpoint=document.getElementById('aiEndpoint')?.value.trim()||endpoint;access=document.getElementById('aiAccess')?.value.trim()||access;
-  if(!endpoint||!access){notice('请展开连接设置，填写后台地址和学习访问口令');document.querySelector('#materialsBody details')?.setAttribute('open','');return}
-  busy=true;
-  document.querySelectorAll('[data-action="ai-generate"]').forEach(b=>b.disabled=true);
+  if(!endpoint||!access){toast('请先填写连接设置中的学习访问口令');notice('请展开连接设置，填写后台地址和学习访问口令');document.querySelector('#materialsBody details')?.setAttribute('open','');return}
+  busy=true;updateButtons();
+  notice('已开始处理资料，正在准备生成…');toast('已开始生成课程，请保持页面打开');
+  btn.parentElement.querySelector('[data-ai-feedback]')?.scrollIntoView({block:'nearest',behavior:'smooth'});
   try{
    url();const parts=batches(m);let added=0;
    if(!persist())throw Error('本机保存失败，请先导出备份并解决存储问题');
@@ -63,7 +81,7 @@
    }
    renderAll();notice('完成：新增 '+added+' 个概念。进入「概念课堂」开始学习；AI 复核不代表教材级准确保证。');
   }catch(e){notice(e.message+'。已成功保存的课程保留，点击同一资料的按钮可继续。')}
-  finally{busy=false;document.querySelectorAll('[data-action="ai-generate"]').forEach(b=>b.disabled=false)}
+  finally{busy=false;updateButtons()}
  });
  document.addEventListener('DOMContentLoaded',()=>{
   const hero=document.getElementById('heroStart');const add=document.createElement('button');add.className='outline-btn';add.textContent='上传资料，生成课程';add.style.margin='12px';add.onclick=()=>navigate('materials');hero.after(add);
